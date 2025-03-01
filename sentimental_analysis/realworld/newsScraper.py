@@ -1,26 +1,26 @@
+import html
 import json
+import logging
+from functools import lru_cache
+
 import requests
 from bs4 import BeautifulSoup
+from django.core.cache import cache
 from newspaper import Article, Config
-import logging
-import html
-from functools import lru_cache
-from .cache_manager import NewsCache
 
+NEWS_JSON_CACHE_KEY = "news_json_cache"
 
 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.54 Safari/537.36"
 
-news_cache = NewsCache()
-
-# This method scraps article using google news that match the relevant query and dumps it on news.json file
+# This method scrapes article using google news that match the relevant query and dumps it to a cache
 def scrapNews(topicName, nums, jsonOutput=True):
     cache_key = f"{topicName}_{nums}"
-    cached_result = news_cache.get(cache_key)
+    cached_result = cache.get(cache_key)
     if cached_result:
         logging.info(f"Retrieved results from cache for {topicName}")
         if jsonOutput:
-            with open("sentimental_analysis/realworld/news.json", "w") as json_file:
-                json.dump(cached_result, json_file)
+            json_str = json.dumps(cached_result)
+            cache.set(NEWS_JSON_CACHE_KEY, json_str)
         return cached_result
 
 
@@ -56,13 +56,14 @@ def scrapNews(topicName, nums, jsonOutput=True):
                 f"Error occured while extracting summary of article - {url}\nError - {e}"
             )
 
-    news_cache.set(cache_key, article_list)
+    cache.set(cache_key, article_list)
 
     if jsonOutput == True:
-        with open("news.json", "w") as json_file:
-            json.dump(article_list, json_file)
+        json_str = json.dumps(article_list)
+        cache.set(NEWS_JSON_CACHE_KEY, json_str)
 
-    logging.warning("Articles saved to news.json")
+
+
     return article_list
 
 

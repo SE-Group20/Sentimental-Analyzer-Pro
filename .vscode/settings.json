@@ -2,6 +2,6 @@
     "editor.defaultFormatter": null,
     "editor.formatOnSave": false,
     "[python]": {
-        "editor.defaultFormatter": "ms-python.autopep8"
+        "editor.defaultFormatter": "ms-python.vscode-pylance"
     },
 }

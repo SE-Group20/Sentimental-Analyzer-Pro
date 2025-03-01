@@ -1,49 +1,56 @@
-import os, sys
-import json
-import csv
-from io import StringIO
-import subprocess
-import shutil
 import base64
-import seaborn as sns
+import csv
 import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+from io import StringIO
+
+import seaborn as sns
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(SCRIPT_DIR))
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import cv2
+import langdetect
+import nltk
 import speech_recognition as sr
-from django.shortcuts import render
+from deepface import DeepFace
+from django.contrib.auth.decorators import login_required
 from django.core.files.storage import FileSystemStorage
-from django.views.decorators.csrf import csrf_exempt
-from django.template.defaulttags import register
 from django.http import HttpResponse
-from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
-from pdfminer.pdfpage import PDFPage
+from django.shortcuts import render
+from django.template.defaulttags import register
+from django.views.decorators.csrf import csrf_exempt
+from nltk import pos_tag
+from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize, word_tokenize
 from pdfminer.converter import TextConverter
 from pdfminer.layout import LAParams
-import nltk
+from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
+from pdfminer.pdfpage import PDFPage
 from pydub import AudioSegment
-from realworld.newsScraper import *
-from realworld.utilityFunctions import *
-from nltk.corpus import stopwords
 from realworld.fb_scrap import *
-from realworld.twitter_scrap import *
+from realworld.newsScraper import *
 from realworld.reddit_scrap import *
-import cv2
-from deepface import DeepFace
-from langdetect import detect
+from realworld.twitter_scrap import *
+from realworld.utilityFunctions import *
 from spanish_nlp import classifiers
-from django.contrib.auth.decorators import login_required
-from nltk import pos_tag
-from nltk.tokenize import sent_tokenize
-from nltk.tokenize import word_tokenize
-from realworld.cache_manager import AnalysisCache
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
 nltk.download('vader_lexicon', quiet=True)
 nltk.download('stopwords', quiet=True)
 nltk.download('punkt', quiet=True)
-from realworld.cache_manager import AnalysisCache
-from transformers import pipeline
-from googletrans import Translator
 import re
+
+from django.core.cache import cache
+from googletrans import Translator
+from transformers import pipeline
+
+# force langdetect to be deterministic:
+from langdetect import DetectorFactory
+DetectorFactory.seed = 0
 
 
 def pdfparser(data):
@@ -261,29 +268,39 @@ def productanalysis(request):
 
 nltk.download('vader_lexicon')
 
-def detect_language(texts):
+def detect_language(texts: str | list[str]):
     """Detects the language of the given text using spaCy."""
     detected_languages = []
+    if isinstance(texts, str):
+        texts = [texts]
     for text in texts:
         try:
-            lang = detect(text)
+            lang = langdetect.detect(text)
             detected_languages.append(lang)
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error detecting language: {e}")
             detected_languages.append("unknown")
     # Determine the most common detected language
     return max(set(detected_languages), key=detected_languages.count)
 
 def analyze_sentiment(text, language):
     """Performs sentiment analysis based on the detected language."""
-    if language == "es":  # Spanish using Spanish NLP Classifier
-            sc = classifiers.SpanishClassifier(model_name="sentiment_analysis")
-            result_classifier = sc.predict(text)
-            print(result_classifier)
-            return {
-                "pos": result_classifier.get("positive", 0.0),
-                "neu": result_classifier.get("neutral", 0.0),
-                "neg": result_classifier.get("negative", 0.0)
-            }
+    if language == "en":
+        scores = sentiment_analyzer_scores(text)
+        return {
+            "pos": scores["pos"],
+            "neu": scores["neu"],
+            "neg": scores["neg"]
+        }
+    elif language == "es":  # Spanish using Spanish NLP Classifier
+        sc = classifiers.SpanishClassifier(model_name="sentiment_analysis")
+        result_classifier = sc.predict(text)
+        print(result_classifier)
+        return {
+            "pos": result_classifier.get("positive", 0.0),
+            "neu": result_classifier.get("neutral", 0.0),
+            "neg": result_classifier.get("negative", 0.0)
+        }
     else:
         translator  = Translator() #Use the imported google translator
         english_text = translator.translate(text, src=language, dest='en')
@@ -315,8 +332,19 @@ def create_word_correlation_heatmap(text):
             if i != j:
                 co_occurrence_matrix.loc[words[i], words[j]] += 1
 
+
+
     # 3. Correlation Matrix
     correlation_matrix = co_occurrence_matrix.corr()
+
+
+    if correlation_matrix.shape[0] == 0:
+        logging.warning("No sentences found for correlation matrix.")
+        return None
+
+    if np.isnan(correlation_matrix).any().any():
+        logging.warning("NaN values found in correlation matrix. Replacing with 0.")
+        correlation_matrix.fillna(0, inplace=True)
 
     # 4. Heatmap Visualization
     plt.figure(figsize=(12, 10))
@@ -376,7 +404,7 @@ def textanalysis(request):
                                                           })
     else:
         note = "Enter the Text to be analysed!"
-        return render(request, 'realworld/textanalysis.html', {'note': note, 'heatmap_image': image_base64})
+        return render(request, 'realworld/textanalysis.html', {'note': note})
 
 def create_sentence_correlation_heatmap(texts):
     all_sentences = []
@@ -396,6 +424,13 @@ def create_sentence_correlation_heatmap(texts):
                     co_occurrence_matrix.loc[all_sentences[i], all_sentences[j]] += 1
 
     correlation_matrix = co_occurrence_matrix.corr()
+    if correlation_matrix.shape[0] == 0:
+        logging.warning("No sentences found for correlation matrix.")
+        return None
+
+    if np.isnan(correlation_matrix).any().any():
+        logging.warning("NaN values found in correlation matrix. Replacing with 0.")
+        correlation_matrix.fillna(0, inplace=True)
 
     plt.figure(figsize=(12, 10))
     sns.heatmap(correlation_matrix, annot=False, cmap='coolwarm')
@@ -662,19 +697,25 @@ def recordaudio(request):
         response = HttpResponse('Success! This is a 200 response.', content_type='text/plain', status=200)
         return response
 
-analysis_cache = AnalysisCache()
 def newsanalysis(request):
     if request.method == 'POST':
         topicname = request.POST.get("topicname", "")
         scrapNews(topicname, 10)
 
-        with open(r'sentimental_analysis/realworld/news.json', 'r') as json_file:
-            json_data = json.load(json_file)
+        json_data = cache.get(NEWS_JSON_CACHE_KEY)
+
         news = []
         for item in json_data:
             news.append(item['Summary'])
 
-        cached_sentiment, cached_text = analysis_cache.get_analysis(topicname, news)
+        # cached_sentiment, cached_text = analysis_cache.get_analysis(topicname, news)
+        cached_sentiment, cached_text = None, None
+        maybe_cached_sentiment: str|None = cache.get(f"{topicname}_sentiment")
+        if maybe_cached_sentiment:
+            cached_sentiment, cached_text = maybe_cached_sentiment
+            cached_sentiment = json.loads(cached_sentiment)
+            cached_text = json.loads(cached_text)
+
 
         if cached_sentiment and cached_text:
             print('loaded sentiment')
@@ -689,7 +730,9 @@ def newsanalysis(request):
         finalText = news
         result = detailed_analysis(news)
         print('cached sentiment')
-        analysis_cache.set_analysis(topicname, news, result, finalText)
+        # analysis_cache.set_analysis(topicname, news, result, finalText)
+        cache.set(f"{topicname}_sentiment", (json.dumps(result), json.dumps(finalText)))
+
 
         return render(request, 'realworld/results.html', {'sentiment': result, 'text' : finalText, 'reviewsRatio': {}, 'totalReviews': 1, 'showReviewsRatio': False})
 

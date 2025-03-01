@@ -376,12 +376,12 @@ class LanguageCheck(TestCase):
     def test_eng_check(self):
         # Fails: apparently I speak vietnamese
         result = detect_language("This is a test sentence with tons of english-like words")
-        self.assertEqual(result, True)
+        self.assertEqual(result, 'en')
 
     # kwilso24
     def test_es_check(self):
         result = detect_language("Hola, como estas?")
-        self.assertEqual(result, False)
+        self.assertEqual(result, 'es')
 
 
 if __name__ == '__main__':

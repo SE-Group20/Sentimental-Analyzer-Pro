@@ -129,3 +129,12 @@ MEDIA_URL = '/media/'
 
 LOGIN_URL = '/auth/login/'
 LOGIN_REDIRECT_URL = '/'
+
+# cache for scraped results
+# https://docs.djangoproject.com/en/5.1/topics/cache/#filesystem-caching
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": "/var/tmp/django_cache",
+    }
+}
